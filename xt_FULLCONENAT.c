@@ -120,7 +120,7 @@ static struct nat_mapping* allocate_mapping(const __be32 int_addr, const uint16_
   u32 hash_src;
 
   p_new = kmalloc(sizeof(struct nat_mapping), GFP_ATOMIC);
-  if (p_new == NULL) {
+  if (unlikely(p_new == NULL)) {
     pr_debug("xt_FULLCONENAT: ERROR: kmalloc() for new nat_mapping failed.\n");
     return NULL;
   }
@@ -145,7 +145,7 @@ static struct nat_mapping* allocate_mapping(const __be32 int_addr, const uint16_
 
 static void add_original_tuple_to_mapping(struct nat_mapping *mapping, const struct nf_conntrack_tuple* original_tuple) {
   struct nat_mapping_original_tuple *item = kmalloc(sizeof(struct nat_mapping_original_tuple), GFP_ATOMIC);
-  if (item == NULL) {
+  if (unlikely(item == NULL)) {
     pr_debug("xt_FULLCONENAT: ERROR: kmalloc() for nat_mapping_original_tuple failed.\n");
     return;
   }
@@ -158,7 +158,7 @@ static struct nat_mapping* get_mapping_by_ext_port(const uint16_t port, const in
   struct nat_mapping *p_current;
 
   hash_for_each_possible(mapping_table_by_ext_port, p_current, node_by_ext_port, port) {
-    if (p_current->port == port && p_current->ifindex == ifindex) {
+    if (likely(p_current->port == port && p_current->ifindex == ifindex)) {
       return p_current;
     }
   }
@@ -171,7 +171,7 @@ static struct nat_mapping* get_mapping_by_int_src(const __be32 src_ip, const uin
   u32 hash_src = HASH_2(src_ip, (u32)src_port);
 
   hash_for_each_possible(mapping_table_by_int_src, p_current, node_by_int_src, hash_src) {
-    if (p_current->int_addr == src_ip && p_current->int_port == src_port) {
+    if (likely(p_current->int_addr == src_ip && p_current->int_port == src_port)) {
       return p_current;
     }
   }
@@ -183,7 +183,7 @@ static void kill_mapping(struct nat_mapping *mapping) {
   struct list_head *iter, *tmp;
   struct nat_mapping_original_tuple *original_tuple_item;
 
-  if (mapping == NULL) {
+  if (unlikely(mapping == NULL)) {
     return;
   }
 
@@ -221,11 +221,11 @@ static int check_mapping(struct nat_mapping* mapping, struct net *net, const str
   struct nf_conntrack_tuple_hash *tuple_hash;
   struct nf_conn *ct;
 
-  if (mapping == NULL) {
+  if (unlikely(mapping == NULL)) {
     return 0;
   }
 
-  if (mapping->port == 0 || mapping->int_addr == 0 || mapping->int_port == 0 || mapping->ifindex == -1) {
+  if (unlikely(mapping->port == 0 || mapping->int_addr == 0 || mapping->int_port == 0 || mapping->ifindex == -1)) {
     return 0;
   }
 
@@ -237,7 +237,7 @@ static int check_mapping(struct nat_mapping* mapping, struct net *net, const str
 
     tuple_hash = nf_conntrack_find_get(net, zone, &original_tuple_item->tuple);
 
-    if (tuple_hash == NULL) {
+    if (unlikely(tuple_hash == NULL)) {
       pr_debug("xt_FULLCONENAT: check_mapping(): tuple %s dying/unconfirmed. free this tuple.\n", nf_ct_stringify_tuple(&original_tuple_item->tuple));
 
       list_del(&original_tuple_item->node);
@@ -245,7 +245,7 @@ static int check_mapping(struct nat_mapping* mapping, struct net *net, const str
       (mapping->refer_count)--;
     } else {
       ct = nf_ct_tuplehash_to_ctrack(tuple_hash);
-      if (ct != NULL)
+      if (likely(ct != NULL))
         nf_ct_put(ct);
     }
 
@@ -253,7 +253,7 @@ static int check_mapping(struct nat_mapping* mapping, struct net *net, const str
 
   /* kill the mapping if need */
   pr_debug("xt_FULLCONENAT: check_mapping() refer_count for mapping at ext_port %d is now %d\n", mapping->port, mapping->refer_count);
-  if (mapping->refer_count <= 0) {
+  if (unlikely(mapping->refer_count <= 0)) {
     pr_debug("xt_FULLCONENAT: check_mapping(): kill dying/unconfirmed mapping at ext port %d\n", mapping->port);
     kill_mapping(mapping);
     return 0;
@@ -345,7 +345,7 @@ static int ct_event_cb(unsigned int events, struct nf_ct_event *item) {
 
   ct = item->ct;
   /* we handle only conntrack destroy events */
-  if (ct == NULL || !(events & (1 << IPCT_DESTROY))) {
+  if (unlikely(ct == NULL || !(events & (1 << IPCT_DESTROY)))) {
     return 0;
   }
 
@@ -354,13 +354,13 @@ static int ct_event_cb(unsigned int events, struct nf_ct_event *item) {
   ct_tuple_reply = &(ct->tuplehash[IP_CT_DIR_REPLY].tuple);
 
   protonum = (ct_tuple_original->dst).protonum;
-  if (protonum != IPPROTO_UDP) {
+  if (unlikely(protonum != IPPROTO_UDP)) {
     return 0;
   }
 
   dying_tuple_item = kmalloc(sizeof(struct tuple_list), GFP_ATOMIC);
 
-  if (dying_tuple_item == NULL) {
+  if (unlikely(dying_tuple_item == NULL)) {
     pr_debug("xt_FULLCONENAT: warning: ct_event_cb(): kmalloc failed.\n");
     return 0;
   }
@@ -385,18 +385,18 @@ static __be32 get_device_ip(const struct net_device* dev) {
   struct in_ifaddr* if_info;
   __be32 result;
 
-  if (dev == NULL) {
+  if (unlikely(dev == NULL)) {
     return 0;
   }
 
   rcu_read_lock();
-  in_dev = dev->ip_ptr;
-  if (in_dev == NULL) {
+  in_dev = (struct in_device *)dev->ip_ptr;
+  if (unlikely(in_dev == NULL)) {
     rcu_read_unlock();
     return 0;
   }
   if_info = in_dev->ifa_list;
-  if (if_info) {
+  if (likely(if_info)) {
     result = if_info->ifa_local;
     rcu_read_unlock();
     return result;
@@ -510,7 +510,7 @@ static unsigned int fullconenat_tg(struct sk_buff *skb, const struct xt_action_p
     ct_tuple_origin = &(ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple);
 
     protonum = (ct_tuple_origin->dst).protonum;
-    if (protonum != IPPROTO_UDP) {
+    if (unlikely(protonum != IPPROTO_UDP)) {
       return ret;
     }
     ip = (ct_tuple_origin->dst).u3.ip;
@@ -519,7 +519,7 @@ static unsigned int fullconenat_tg(struct sk_buff *skb, const struct xt_action_p
     /* get the corresponding ifindex by the dst_ip (aka. external ip of this host),
      * in case the packet needs to be forwarded from another inbound interface. */
     net_dev = ip_dev_find(net, ip);
-    if (net_dev != NULL) {
+    if (likely(net_dev != NULL)) {
       ifindex = net_dev->ifindex;
       dev_put(net_dev);
     }
@@ -528,11 +528,11 @@ static unsigned int fullconenat_tg(struct sk_buff *skb, const struct xt_action_p
 
     /* find an active mapping based on the inbound port */
     mapping = get_mapping_by_ext_port(port, ifindex);
-    if (mapping == NULL) {
+    if (unlikely(mapping == NULL)) {
       spin_unlock_bh(&fullconenat_lock);
       return ret;
     }
-    if (check_mapping(mapping, net, zone)) {
+    if (likely(check_mapping(mapping, net, zone))) {
       newrange.flags = NF_NAT_RANGE_MAP_IPS | NF_NAT_RANGE_PROTO_SPECIFIED;
       newrange.min_addr.ip = mapping->int_addr;
       newrange.max_addr.ip = mapping->int_addr;
@@ -561,12 +561,12 @@ static unsigned int fullconenat_tg(struct sk_buff *skb, const struct xt_action_p
 
     spin_lock_bh(&fullconenat_lock);
 
-    if (protonum == IPPROTO_UDP) {
+    if (likely(protonum == IPPROTO_UDP)) {
       ip = (ct_tuple_origin->src).u3.ip;
       original_port = be16_to_cpu((ct_tuple_origin->src).u.udp.port);
 
       src_mapping = get_mapping_by_int_src(ip, original_port);
-      if (src_mapping != NULL && check_mapping(src_mapping, net, zone)) {
+      if (unlikely(src_mapping != NULL && check_mapping(src_mapping, net, zone))) {
 
         /* outbound nat: if a previously established mapping is active,
          * we will reuse that mapping. */
@@ -602,7 +602,7 @@ static unsigned int fullconenat_tg(struct sk_buff *skb, const struct xt_action_p
     /* do SNAT now */
     ret = nf_nat_setup_info(ct, &newrange, HOOK2MANIP(xt_hooknum(par)));
 
-    if (protonum != IPPROTO_UDP || ret != NF_ACCEPT) {
+    if (unlikely(protonum != IPPROTO_UDP || ret != NF_ACCEPT)) {
       /* for non-UDP packets and failed SNAT, bailout */
       spin_unlock_bh(&fullconenat_lock);
       return ret;
